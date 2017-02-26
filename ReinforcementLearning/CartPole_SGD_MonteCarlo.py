@@ -31,7 +31,8 @@ def get_feature_vector(states, actions):
     return featureVector1D
 
 def np_state(gym_states):
-    return np.append(np.array(gym_states), 1)
+    np_states = np.append(np.array(gym_states), 1)
+    return np_states
 
 def get_epsilon_action(weights, currentState, epsilon, env):
     if  random.random() < epsilon:
@@ -69,6 +70,7 @@ def run():
     env = gym.make('CartPole-v0')
     print('Action space:', env.action_space)
     print('Observation space:', env.observation_space)
+    print("cart_position, pole_angle, cart_velocity, angle_rate_of_change")
 
     memory = []
 
