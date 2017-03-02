@@ -6,23 +6,13 @@ import random
 
 def q_function(states, actions, weights):
     '''
-    Gets a Q Value for the state/action/weights pair
-    :param states:
-    :param actions:
-    :param weights:
-    :return:
+    Returns a 2d vector.  The argmax is the action
     '''
     featureVector = get_feature_vector(states, actions)
     qValue = np.matmul(weights.reshape((1,10)), featureVector)
     return qValue
 
 def get_feature_vector(states, actions):
-    '''
-    Converts the state and action vectors to a 1 dimensional feature vector with 10 values
-    :param states: 4 values in 1D vector
-    :param actions: 2 values in 1D vector
-    :return: a 1 dimensional feature vector with 10 values
-    '''
     states = states.reshape(1,5)
     states2x = np.concatenate((states,states))
     actions = actions.reshape(2,1)
@@ -31,8 +21,7 @@ def get_feature_vector(states, actions):
     return featureVector1D
 
 def np_state(gym_states):
-    np_states = np.append(np.array(gym_states), 1)
-    return np_states
+    return np.append(np.array(gym_states), 1)
 
 def get_epsilon_action(weights, currentState, epsilon, env):
     if  random.random() < epsilon:
@@ -61,8 +50,11 @@ def run():
     #--------------------------------------------------------------------------
     #--------------------------------------------------------------------------
     epsilon = 0.1
+    gamma = 0.5
     alpha = 0.01
+    tdLambda = 0.5
     weights = np.random.rand(2,5)
+
 
     #--------------------------------------------------------------------------
     #--------------------------------------------------------------------------
@@ -70,49 +62,53 @@ def run():
     env = gym.make('CartPole-v0')
     print('Action space:', env.action_space)
     print('Observation space:', env.observation_space)
-    print("cart_position, pole_angle, cart_velocity, angle_rate_of_change")
-
-    memory = []
 
     for episode in range(2000):
-        stepCount = 0
-        done = False
-        state = np_state(env.reset())
-        while True:
-            action = get_epsilon_action(weights, state, epsilon, env)
-            scalarAction = np.argmax(action)
-            nextState, reward, done, _ = env.step(scalarAction)
-            reward = math.cos(nextState[1])
-            memory.append({"state": state, "action": action, "reward": reward} )
-            state = np_state(nextState)
-            stepCount = stepCount + 1
+        currentState = np_state(env.reset())
+        currentAction = get_epsilon_action(weights, currentState, epsilon, env)
+        eligibilityTrace = np.zeros(10)
 
-            if episode > 200:
+        t = 0
+        T = 0
+        while True:
+            a = np.argmax(currentAction)
+            nextState, reward, done, _ = env.step(a)
+            reward = math.cos(nextState[1])
+            nextState = np_state(nextState)
+            nextAction = get_epsilon_action(weights, nextState, epsilon, env)
+
+            #Calculate eligibility Trace
+            gradient = get_feature_vector(currentState, currentAction)
+            eligibilityTrace = gamma * tdLambda * eligibilityTrace  + gradient
+
+            # Calculate Delta
+            target = reward + gamma * q_function(nextState, nextAction, weights)
+            learner = q_function(currentState, currentAction, weights)
+            deltaT = target - learner
+
+            #Update Weights
+            weights_delta =  alpha * deltaT * eligibilityTrace
+            weights_delta2d = weights_delta.reshape(2, 5)
+            weights = weights + weights_delta2d
+
+
+            #Next State
+            currentState = np.copy(nextState)
+            currentAction = np.copy(nextAction)
+            t += 1
+
+            if episode>1800:
                 epsilon = 0.00
                 alpha = 0.001
                 env.render()
-                print(action)
 
             if done == True:
-                reward = -10
-                endAction = np.array([0, 0])
-                memory.append({"state": state, "action": endAction, "reward": reward} )
-
                 if episode > 200:
-                    print("Episode: ", episode, " Done in ", stepCount)
+                    print("Episode: ", episode, " Done in ", t)
                     print(np.round(weights,6))
                 break
 
-        for mem in memory:
-            state = mem["state"]
-            action = mem["action"]
-            reward = mem["reward"]
 
-            learner = q_function(state, action, weights)
-            gradient =  get_feature_vector(state, action)
-            weights_delta = alpha * (reward - learner) * gradient
-            weights_delta2d = weights_delta.reshape(2, 5)
-            weights = weights + weights_delta2d
 
 
 if __name__ == "__main__":
