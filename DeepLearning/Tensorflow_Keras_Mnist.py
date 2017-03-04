@@ -27,8 +27,8 @@ def run():
         #    plt.title("Class {}".format(y_train[i]))
         #plt.show()
 
-        X_train = X_train.reshape(60000, 1, 28, 28)
-        X_test = X_test.reshape(10000, 1, 28, 28)
+        X_train = X_train.reshape(60000, 28, 28, 1)
+        X_test = X_test.reshape(10000, 28, 28, 1)
         X_train = X_train.astype('float32')
         X_test = X_test.astype('float32')
         X_train /= 255
@@ -43,13 +43,14 @@ def run():
 
 
         model = Sequential()
-        model.add(Convolution2D(32, nb_row=1, nb_col=1, input_shape=(1, 28, 28,)))
+        model.add(Convolution2D(32, nb_row=3, nb_col=3, border_mode='valid', input_shape=(28, 28, 1)))
         model.add(Activation('relu'))
-        model.add(MaxPooling2D(pool_size=(1, 1)))
+        model.add(MaxPooling2D(pool_size=(2, 2)))
 
-        model.add(Convolution2D(32, 1, 1))
+        model.add(Convolution2D(32, nb_row=3, nb_col=3, border_mode='valid'))
         model.add(Activation('relu'))
-        model.add(MaxPooling2D(pool_size=(1, 1)))
+        model.add(MaxPooling2D(pool_size=(2, 2)))
+
 
         model.add(Flatten())
         model.add(Dense(512))
@@ -58,20 +59,19 @@ def run():
         model.add(Dense(10))
         model.add(Activation('softmax'))
         model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=["accuracy"])
-        #model.compile(loss='categorical_crossentropy', optimizer='adam')
 
-        step_size = 1000
 
-        for i in range(0, 60000, step_size):
-            sub_x = X_train[i:(step_size+i)]
-            sub_y = Y_train[i:(step_size+i)]
-            sub_x = sub_x.reshape(step_size, 1, 28, 28)
-            sub_y = sub_y.reshape(step_size, 10)
-            model.fit(sub_x, sub_y, nb_epoch=1, verbose=0)
+        # step_size = 1000
+        # for i in range(0, 60000, step_size):
+        #     sub_x = X_train[i:(step_size+i)]
+        #     sub_y = Y_train[i:(step_size+i)]
+        #     sub_x = sub_x.reshape(step_size, 28, 28, 1)
+        #     sub_y = sub_y.reshape(step_size, 10)
+        #     model.fit(sub_x, sub_y, nb_epoch=1, verbose=0)
 
-        # model.fit(X_train, Y_train,
-        #           batch_size=128, nb_epoch=1, verbose=0,
-        #           validation_data=(X_test, Y_test))
+        model.fit(X_train, Y_train,
+                  batch_size=128, nb_epoch=4, verbose=1,
+                  validation_data=(X_test, Y_test))
 
         score = model.evaluate(X_test, Y_test, verbose=1)
         print('\n')
