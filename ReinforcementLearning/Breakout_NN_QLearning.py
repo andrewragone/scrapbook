@@ -7,13 +7,14 @@ from datetime import datetime
 from os.path import isfile
 from keras.models import Sequential
 from keras.optimizers import sgd, adam
-from keras.layers.core import Dense, Activation, Flatten
+from keras.layers.core import Dense, Activation, Flatten, Dropout
+from keras.layers.convolutional import Convolution1D, MaxPooling1D, Convolution2D, MaxPooling2D
 
 
 class DQN():
-    def __init__(self, epsilon=0.9, epsilon_min=0.01, epsilon_decay = 10000, total_episodes = 1000000,
-                 memory_max_replay = 10000, memory_batch_size = 500, swap_nn_weights_step_count = 5000,
-                 weights_file = "Breakout_NN_QLearning_Weights.h5", render = False, loadWeights = False):
+    def __init__(self, epsilon=0.9999, epsilon_min=0.01, epsilon_decay = 10000, total_episodes = 1000000,
+                 memory_max_replay = 3000, memory_batch_size = 300, swap_nn_weights_step_count = 5000,
+                 weights_file = "Breakout_NN_QLearning_Weights.h5", render = False, loadWeights = True):
         self.epsilon = epsilon
         self.epsilon_decay = epsilon_decay
         self.epsilon_min = epsilon_min
@@ -24,13 +25,14 @@ class DQN():
         self.memory_batch_size = memory_batch_size
         self.swap_nn_weights_step_count = swap_nn_weights_step_count
         self.weights_file = weights_file
+        self.rgb_vector = np.array([.333333, .333333, .333333]).reshape(3,1)
+        np.set_printoptions(precision=6)
 
-    def run(self):
-        env = gym.make('Breakout-ram-v0')
+    def main(self):
+        env = gym.make('Breakout-v0')
 
         print('Action space:', env.action_space, env.action_space.sample())
         print('Observation space:', env.observation_space)
-        print("cart_position, pole_angle, cart_velocity, angle_rate_of_change")
 
         action_model = self.__create_nn_model()
         learning_model = self.__create_nn_model()
@@ -40,7 +42,7 @@ class DQN():
 
         for episode in range(self.total_episodes):
             stepCount = 0
-            processed_state = np.zeros((4,128))
+            processed_state = np.zeros((210, 160, 4))
             state = self.__process_gym_state(env.reset(), processed_state)
             done = False
             score = 0
@@ -48,20 +50,20 @@ class DQN():
                 if self.render:
                     env.render()
                 action = self.__get_epsilon_action(action_model, state, env)
-                nextState, reward, done, info = env.step(action)
+                nextState, reward, done, info = env.step(action + 3)
                 nextState = self.__process_gym_state(nextState, state)
-                expReplay.store_transition(state, action, reward*100, nextState, done)
+                expReplay.store_transition(state, action, reward, nextState, done)
                 score += reward
                 stepCount += 1
                 totalSteps += 1
                 state = nextState
 
             inputs, targets = expReplay.random_mini_batch(model=action_model, batch_size=self.memory_batch_size)
-            print(targets)
+            #print(targets[0:10])
             loss = learning_model.train_on_batch(inputs, targets)
             self.__update_epsilon_decay()
             self.__save_weights(learning_model)
-            print(str(datetime.now()), " Episode: ", episode, " epsilon ",  '%0.6f' % self.epsilon, " loss ", '%0.7f' % loss, " score ", score, " Done in ", stepCount)
+            print(str(datetime.now()), " Episode: ", episode, " epsilon ",  '%0.6f' % self.epsilon, " loss ", '%0.7f' % loss, " score ", score, " Done in ", stepCount, " total Steps ", totalSteps)
             if self.swap_nn_weights_step_count < totalSteps:
                 action_model.load_weights(self.weights_file)
                 print("   Set action_model weights to learning_model at ", totalSteps, " steps")
@@ -69,17 +71,23 @@ class DQN():
 
     def __create_nn_model(self):
         model = Sequential()
-        model.add(Dense(6, bias=False, input_shape=(4,128)))
+        #model.add(Dense(128, bias=False, input_shape=(4,128)))
+        model.add(Convolution2D(32, 8, 8, subsample=(4, 4),   input_shape=(210, 160, 4)))
+        model.add(Activation('relu'))
+        model.add(Convolution2D(64, 4, 4, subsample=(2, 2)))
+        model.add(Activation('relu'))
+        model.add(Convolution2D(64, 3, 3))
         model.add(Activation('relu'))
         model.add(Flatten())
-        model.add(Dense(6, bias=False))
-        model.add(Activation('linear'))
-        model.compile(loss='mean_squared_error', optimizer=adam(lr=0.1))
+        model.add(Dense(512))
+        model.add(Activation('relu'))
+        model.add(Dense(2))
+        model.compile(loss='mean_squared_error', optimizer=adam(lr=0.00001))
         return model
 
     def __get_epsilon_action(self, model, currentState, env):
         if random.random() < self.epsilon:
-            action = random.choice([2,3,4])
+            action = random.choice([0,1])
             return action
         else:
             actionQvalues = model.predict(currentState)
@@ -91,10 +99,11 @@ class DQN():
             self.epsilon -= (1 / (self.epsilon_decay))
 
     def __process_gym_state(self, gym_state, processed_state):
+        gym_state = np.matmul(gym_state, self.rgb_vector).reshape((210, 160))
         state = np.append(processed_state, gym_state)
-        state = np.reshape(state, (5,128))
-        state = np.delete(state, 0, 0)
-        state = np.reshape(state, (1, 4, 128))
+        state = np.reshape(state, (210, 160, 5))
+        state = np.delete(state, 0, 2)
+        state = np.reshape(state, (1, 210, 160, 4))
         return state
 
     def __save_weights(self, learning_model):
@@ -152,4 +161,4 @@ class ExperienceReplay():
 
 if __name__ == "__main__":
     dqn = DQN()
-    dqn.run()
+    dqn.main()
