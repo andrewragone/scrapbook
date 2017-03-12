@@ -15,7 +15,7 @@ class DQN():
     def __init__(self, model_lr=0.00001, epsilon=0.99, epsilon_min=0.01, epsilon_decay = 5000, total_episodes = 1000000,
                  memory_max_replay = 3000, memory_batch_size = 300, swap_nn_weights_step_count = 5000,
                  gym_game = 'SpaceInvaders-v0', gym_action_num = 3, gym_action_shift = 2,
-                 render = True, loadWeights = True):
+                 render = False, loadWeights = True):
         '''
         :param model_lr:  adam optimizer learning rate
         :param epsilon:   inital epsilon for epsilon greedy exploration algorithm
@@ -45,11 +45,10 @@ class DQN():
         self.gym_action_num = gym_action_num
         self.gym_action_shift = gym_action_shift
         self.gym_game = gym_game
-        self.weights_file = "{}_NN_QLearning_Weights.h5".format(self.gym_game)
+        self.weights_file = "DQN_Weights_{}.h5".format(self.gym_game)
 
-
-        self.rgb_vector = np.array([.333333, .333333, .333333]).reshape(3,1)
-        np.set_printoptions(precision=4)
+        self.rgb_vector = np.array([.333333, .333333, .333333]).reshape(3,1) #Transform RGB into Gray Scale
+        np.set_printoptions(precision=4) #Display for Numpy arrays
 
     def main(self):
         env = gym.make(self.gym_game)
@@ -71,6 +70,7 @@ class DQN():
             processed_state = np.zeros((210, 160, 4))
             state = self.__process_gym_state(env.reset(), processed_state)
 
+            #Play Game and store SARS in Replay Memory
             while done == False:
                 if self.render:
                     env.render()
@@ -83,6 +83,7 @@ class DQN():
                 totalSteps += 1
                 state = nextState
 
+            #Get mini batch to train network.  This method calcuates the target values
             inputs, targets = expReplay.random_mini_batch(action_value = self.action_value,
                                                           target_action_value=self.target_action_value,
                                                           batch_size=self.memory_batch_size)
@@ -109,6 +110,7 @@ class DQN():
         model.add(Dense(512, bias=False))
         model.add(Activation('relu'))
         model.add(Dense(self.gym_action_num, bias=False))
+        model.add(Activation('linear'))
         model.compile(loss='mean_squared_error', optimizer=adam(lr=self.model_lr))
         return model
 
