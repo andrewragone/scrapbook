@@ -2,28 +2,30 @@ import gym
 import numpy as np
 import random
 import os
+import tensorflow as tf
 
 from datetime import datetime
 from os.path import isfile
 from keras.models import Sequential
-from keras.optimizers import sgd, adam
+from keras.optimizers import sgd, adam, rmsprop
 from keras.layers.core import Dense, Activation, Flatten
 from keras.layers.convolutional import Convolution2D
 
 
 class DQN():
-    def __init__(self, model_lr=0.00001, epsilon=0.99, epsilon_min=0.01, epsilon_decay = 5000, total_episodes = 1000000,
-                 memory_max_replay = 3000, memory_batch_size = 300, swap_nn_weights_step_count = 5000,
+    def __init__(self, model_lr=0.00025, epsilon=0.01, epsilon_min=0.01, epsilon_decay = 10000, total_episodes = 1000000,
+                 memory_max_replay = 5000, mini_batch_size = 350, target_network_update_freq = 10000,
                  gym_game = 'SpaceInvaders-v0', gym_action_num = 3, gym_action_shift = 2,
-                 render = False, loadWeights = True):
+                 render = True, loadWeights = True):
         '''
         :param model_lr:  adam optimizer learning rate
         :param epsilon:   inital epsilon for epsilon greedy exploration algorithm
         :param epsilon_min:  final epsilon for epsilon greedy exploration algorithm
-        :param epsilon_decay:  decay epislon at using the formula:  epsilon = epsilon - (1 / (epsilon_decay))
+        :param epsilon_decay:  steps requried before epislon reaches epsilon_min.
+                               using the formula:  epsilon = epsilon - (1 / (epsilon_decay))
         :param total_episodes:  the total number of episodes that the program will execute
         :param memory_max_replay:  number of State, Action, Rewards, nextState moves that are stored in the reply memory
-        :param memory_batch_size:  size of mini batch that is randomly sampled from replay memory
+        :param mini_batch_size:  size of mini batch that is randomly sampled from replay memory
         :param swap_nn_weights_step_count:  number of steps taken before the target-action-value neural network model
                                             loads the weights from the action-value neural network model
         :param gym_game:  select a non ram game from https://gym.openai.com/envs#atari (e.g. Breakout-v0)
@@ -40,8 +42,8 @@ class DQN():
         self.loadWeights = loadWeights
         self.total_episodes = total_episodes
         self.memory_max_replay = memory_max_replay
-        self.memory_batch_size = memory_batch_size
-        self.swap_nn_weights_step_count = swap_nn_weights_step_count
+        self.mini_batch_size = mini_batch_size
+        self.target_network_update_freq = target_network_update_freq
         self.gym_action_num = gym_action_num
         self.gym_action_shift = gym_action_shift
         self.gym_game = gym_game
@@ -83,18 +85,29 @@ class DQN():
                 totalSteps += 1
                 state = nextState
 
+                # #Get mini batch to train network.  This method calcuates the target values
+                # inputs, targets = expReplay.random_mini_batch(action_value = self.action_value,
+                #                                               target_action_value=self.target_action_value,
+                #                                               batch_size=self.mini_batch_size)
+                # loss = self.action_value.train_on_batch(inputs, targets)
+                # if stepCount%20 == 0:
+                #     print("\t",str(datetime.now()), "memory ", expReplay.count(), " epsilon ",  '%0.6f' % self.epsilon,
+                #           " step: ", stepCount, " loss ", '%0.5f' % loss,
+                #           " score ", score, targets[0:1], targets[1:2], targets[2:3])
+
+
             #Get mini batch to train network.  This method calcuates the target values
             inputs, targets = expReplay.random_mini_batch(action_value = self.action_value,
                                                           target_action_value=self.target_action_value,
-                                                          batch_size=self.memory_batch_size)
+                                                          batch_size=self.mini_batch_size)
             loss = self.action_value.train_on_batch(inputs, targets)
-
             self.__save_weights(self.action_value)
             self.__update_epsilon_decay()
 
-            print(str(datetime.now()), " Episode: ", episode, " epsilon ",  '%0.6f' % self.epsilon, " loss ", '%0.7f' % loss, " score ", score, " Done in ", stepCount, " total Steps ", totalSteps)
-            print("Top 10 action-value from mini batch sample")
-            print(targets[0:10])
+            print(str(datetime.now())," Episode: ", episode, " epsilon ",  '%0.4f' % self.epsilon,
+                  " loss ", '%0.5f' % loss, " step: ", stepCount, " total Steps ", totalSteps, " score ", score, 
+                  "\t",targets[0:1], "\t", targets[1:2], "\t", targets[2:3])
+
 
             totalSteps = self.__update_target_action_value(totalSteps)
 
@@ -111,7 +124,7 @@ class DQN():
         model.add(Activation('relu'))
         model.add(Dense(self.gym_action_num, bias=False))
         model.add(Activation('linear'))
-        model.compile(loss='mean_squared_error', optimizer=adam(lr=self.model_lr))
+        model.compile(loss='mean_squared_error', optimizer=rmsprop(lr=self.model_lr))
         return model
 
     def __get_epsilon_action(self, currentState):
@@ -128,7 +141,7 @@ class DQN():
             self.epsilon -= (1 / (self.epsilon_decay))
 
     def __update_target_action_value(self, totalSteps):
-        if self.swap_nn_weights_step_count < totalSteps:
+        if self.target_network_update_freq < totalSteps:
             self.target_action_value.load_weights(self.weights_file)
             print("   Set target_action_value weights to action_value at ", totalSteps, " steps")
             totalSteps = 0
@@ -163,10 +176,13 @@ class ExperienceReplay():
         if len(self.memory) > self.max_memory:
             del self.memory[0]
 
+    def memory_size(self):
+        return len(self.memory)
+
     def clear_memory(self):
         self.memory.clear()
 
-    def random_mini_batch(self, action_value, target_action_value, batch_size = 50, gamma = 0.99):
+    def random_mini_batch(self, action_value, target_action_value, batch_size = 32, gamma = 0.99):
         len_memory = len(self.memory)
         batch_size = min(len_memory, batch_size)
 
@@ -177,7 +193,7 @@ class ExperienceReplay():
             state, action, reward, nextState, isDone = m["state"], m["action"], m["reward"], m["nextState"], m["done"]
             target = action_value.predict(state)
             if isDone == True:
-                target[0, action] = reward
+                target[0, action] = -1
             else:
                 Qvalue = target_action_value.predict(nextState)
                 Qvalue = np.max(Qvalue)
