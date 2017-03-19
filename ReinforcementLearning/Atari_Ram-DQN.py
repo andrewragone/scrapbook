@@ -13,9 +13,9 @@ from keras.layers.convolutional import Convolution1D
 
 
 class DQN():
-    def __init__(self, model_lr=0.0001, epsilon=1.0, epsilon_min=0.1, epsilon_decay = 5000, total_episodes = 1000000,
-                 memory_max_replay = 20000, mini_batch_size = 2000, target_network_update_freq = 10000,
-                 gym_game = 'SpaceInvaders-ram-v0', gym_action_num = 3, gym_action_shift = 2,
+    def __init__(self, model_lr=0.001, epsilon=0.1, epsilon_min=0.1, epsilon_decay = 5000000, total_episodes = 1000000,
+                 memory_max_replay = 10000, mini_batch_size = 128, target_network_update_freq = 10000,
+                 gym_game = 'Pong-ram-v0', gym_action_num = 2, gym_action_shift = 2,
                  render = False, loadWeights = True):
         '''
         :param model_lr:  adam optimizer learning rate
@@ -66,10 +66,10 @@ class DQN():
         for episode in range(self.total_episodes):
             stepCount = 0
             score = 0
+            loss = 0
             done = False
 
-            processed_state = np.zeros((128, 4))
-            state = self.__process_gym_state(env.reset(), processed_state)
+            state = self.__process_gym_state(env.reset())
 
             #Play Game and store SARS in Replay Memory
             while done == False:
@@ -77,54 +77,36 @@ class DQN():
                     env.render()
                 action = self.__get_epsilon_action(state)
                 nextState, reward, done, info = env.step(action + self.gym_action_shift)
-                nextState = self.__process_gym_state(nextState, state)
-                expReplay.store_transition(state, action, reward, nextState, done)
+                nextState = self.__process_gym_state(nextState)
+                expReplay.store_transition(state.reshape(128), action, reward, nextState.reshape(128), done)
                 score += reward
                 stepCount += 1
                 totalSteps += 1
                 state = nextState
+                self.__update_epsilon_decay()
 
-                # #Get mini batch to train network.  This method calcuates the target values
-                # inputs, targets = expReplay.random_mini_batch(action_value = self.action_value,
-                #                                               target_action_value=self.target_action_value,
-                #                                               batch_size=self.mini_batch_size)
-                # loss = self.action_value.train_on_batch(inputs, targets)
-                # if stepCount%20 == 0:
-                #     print("\t",str(datetime.now()), "memory ", expReplay.memory_size(), " epsilon ",  '%0.6f' % self.epsilon,
-                #           " step: ", stepCount, " loss ", '%0.5f' % loss,
-                #           " score ", score, targets[0:1], targets[1:2], targets[2:3])
+                #Get mini batch to train network.  This method calcuates the target values
+                inputs, targets = expReplay.random_mini_batch(action_value = self.action_value,
+                                                              target_action_value=self.target_action_value)
+                loss += self.action_value.train_on_batch(inputs, targets)
 
-
-            #Get mini batch to train network.  This method calcuates the target values
-            print(str(datetime.now()),"Get mini batch to train network.  This method calcuates the target values")
-            inputs, targets = expReplay.random_mini_batch(action_value = self.action_value,
-                                                          target_action_value=self.target_action_value)
-            print(str(datetime.now()),"Calculate Loss")
-            loss = self.action_value.train_on_batch(inputs, targets)
             self.__save_weights(self.action_value)
-            self.__update_epsilon_decay()
 
             print(str(datetime.now()), expReplay.memory_size(), " Episode: ", episode, " epsilon ",  '%0.4f' % self.epsilon,
-                  " loss ", '%0.5f' % loss, " step: ", stepCount, " total Steps ", totalSteps, " score ", score,
-                  "\t",targets[0:1], "\t", targets[1:2], "\t", targets[2:3])
-
+                  " loss ", (loss/stepCount), " step: ", stepCount, " total Steps ", totalSteps, " score ", score,
+                  "\tSample Q-Values: ",targets[0:1], ",\t", targets[1:2], ",\t", targets[2:3])
 
             totalSteps = self.__update_target_action_value(totalSteps)
 
     def __create_nn_model(self):
         model = Sequential()
-        # model.add(Convolution1D(64, 8, subsample_length=4, input_shape=(128, 4), bias=False))
-        # model.add(Activation('relu'))
-        # model.add(Convolution1D(64, 4, subsample_length=2, bias=False))
-        # model.add(Activation('relu'))
-        # model.add(Convolution1D(64, 3, subsample_length=2, bias=False))
-        # model.add(Activation('relu'))
-        model.add(Dense(128, input_shape=(128,4), bias=False))
+        model.add(Dense(512, input_dim=128, bias=True))
         model.add(Activation('relu'))
-        model.add(Flatten())
-        model.add(Dense(64, bias=False))
+        model.add(Dense(256, bias=True))
         model.add(Activation('relu'))
-        model.add(Dense(self.gym_action_num, bias=False))
+        model.add(Dense(64, bias=True))
+        model.add(Activation('relu'))
+        model.add(Dense(self.gym_action_num, bias=True))
         model.add(Activation('linear'))
         model.compile(loss='mean_squared_error', optimizer=rmsprop(lr=self.model_lr))
         return model
@@ -149,14 +131,8 @@ class DQN():
             totalSteps = 0
         return totalSteps
 
-    def __process_gym_state(self, gym_state, processed_state):
-        #processed_state = np.reshape(processed_state, (512))
-        gym_state = np.reshape(gym_state, (128, 1))
-        processed_state = np.reshape(processed_state, (128, 4))
-        state = np.append(processed_state, gym_state, axis=1)
-        state = np.reshape(state, (128, 5))
-        state = np.delete(state, 0, 1)
-        state = np.reshape(state, (1, 128, 4))
+    def __process_gym_state(self, gym_state):
+        state = np.reshape(gym_state, (1, 128))
         return state
 
     def __save_weights(self, model):
@@ -172,52 +148,57 @@ class DQN():
 
 class ExperienceReplay():
     def __init__(self, max_memory=1000, batch_size = 32):
-        self.memory = np.empty((max_memory, 5), dtype=object)
-        self.memory_length  = 0
+        self.memory_state = []
+        self.memory_action = []
+        self.memory_reward = []
+        self.memory_nextState = []
+        self.memory_done = []
+
         self.max_memory = max_memory
         self.batch_size = batch_size
 
     def store_transition(self, state, action, reward, nextState, done):
-        self.memory = np.roll(self.memory,5)
-        self.memory[0][0] = state
-        self.memory[0][1] = action
-        self.memory[0][2] = reward
-        self.memory[0][3] = nextState
-        self.memory[0][4] = done
-
-        if self.max_memory > self.memory_length:
-            self.memory_length += 1
+        self.memory_state.append(state)
+        self.memory_action.append(action)
+        self.memory_reward.append(reward)
+        self.memory_nextState.append(nextState)
+        self.memory_done.append(done)
+        if self.max_memory < len(self.memory_state):
+            self.memory_state.pop(0)
+            self.memory_action.pop(0)
+            self.memory_reward.pop(0)
+            self.memory_nextState.pop(0)
+            self.memory_done.pop(0)
 
     def memory_size(self):
-        return self.memory_length
+        return len(self.memory_state)
 
     def random_mini_batch(self, action_value, target_action_value, gamma = 0.99):
+        memory_length = len(self.memory_state)
+        batch_size = min(memory_length, self.batch_size)
+        randidx = np.random.choice(memory_length, size=batch_size, replace=False)
 
-        batch_size = min(self.memory_length -1, self.batch_size)
-        randidx = np.random.choice(self.memory_length, size=batch_size, replace=False)
-        mini_batch = self.memory[randidx]
-        #states = mini_batch[:,0]
-        #targets = action_value.predict(states)
+        mini_batch_states = np.take(self.memory_state, randidx, axis=0)
+        mini_batch_actions = np.take(self.memory_action, randidx, axis=0)
+        mini_batch_rewards = np.take(self.memory_reward, randidx, axis=0)
+        mini_batch_nextStates = np.take(self.memory_nextState, randidx, axis=0)
+        mini_batch_done = np.take(self.memory_done, randidx, axis=0)
 
-        states = []
-        targets = []
-        for m in mini_batch:
-            #m = self.memory[i]
-            state, action, reward, nextState, isDone = m[0], m[1], m[2], m[3], m[4]
-            target = action_value.predict(state)
-            if isDone == True:
-                target[0, action] = -1
-            else:
-                Qvalue = np.max(target_action_value.predict(nextState))
-                target[0, action] = reward + gamma * Qvalue
+        targets = action_value.predict(mini_batch_states)
+        Qvalue = target_action_value.predict(mini_batch_nextStates)
+        for i, target in enumerate(targets):
+            action = mini_batch_actions[i]
+            reward = mini_batch_rewards[i]
+            done = mini_batch_done[i]
+            target[action] = reward
+            if done == False:
+                q = Qvalue[i]
+                target[action] += gamma * np.max(q)
 
-            states.append(state[0])
-            targets.append(target[0])
+        return mini_batch_states, targets
 
-        states = np.array(states)
-        targets = np.array(targets)
-        return states, targets
 
 if __name__ == "__main__":
+    #dqn = DQN(gym_game = 'Pong-ram-v0', gym_action_num = 2, gym_action_shift = 2)
     dqn = DQN()
     dqn.main()
